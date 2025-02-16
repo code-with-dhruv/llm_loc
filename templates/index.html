@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Search Engine</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .loading {
+      display: none;
+    }
+    .chat-container {
+      height: calc(100vh - 200px);
+      overflow-y: auto;
+    }
+    .progress-bar {
+      width: 0%;
+      height: 6px;
+      background-color: #3b82f6;
+      transition: width 0.3s ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-gray-900 text-white">
+  <div class="flex h-screen">
+    <!-- Sidebar -->
+    <div class="w-64 bg-gray-800 p-4">
+      <div class="mb-8">
+        <button
+          id="indexButton"
+          class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-200"
+        >
+          Index PDFs
+        </button>
+        <div id="indexStatus" class="mt-2 text-sm text-gray-400"></div>
+
+        <!-- Progress Bar Container -->
+        <div id="progressContainer" class="mt-2 hidden">
+          <div class="text-xs text-gray-400 mb-1">Indexing Progress</div>
+          <div class="w-full bg-gray-700 h-6 rounded-lg relative">
+            <div id="progressBar" class="progress-bar"></div>
+          </div>
+          <div id="progressText" class="text-xs text-gray-400 mt-1"></div>
+        </div>
+      </div>
+
+      <div class="space-y-2" id="recentSearches">
+        <h3 class="text-lg font-semibold mb-4">Recent Chats</h3>
+        <!-- Recent chats will be appended here -->
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex-1 p-6">
+      <h1 class="text-3xl font-bold mb-8 text-center">PDF Search Engine</h1>
+
+      <div id="statusBanner" class="hidden max-w-3xl mx-auto mb-4 p-4 rounded-lg"></div>
+
+      <div class="max-w-3xl mx-auto">
+        <div class="flex gap-4 mb-8">
+          <input
+            type="text"
+            id="searchInput"
+            class="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Enter your search query..."
+          />
+          <button
+            id="searchButton"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded transition duration-200"
+          >
+            Search
+          </button>
+        </div>
+
+        <div id="loading" class="loading text-center py-4">
+          <div
+            class="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"
+          ></div>
+        </div>
+
+        <div id="results" class="space-y-4"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const searchInput = document.getElementById('searchInput');
+      const searchButton = document.getElementById('searchButton');
+      const indexButton = document.getElementById('indexButton');
+      const resultsContainer = document.getElementById('results');
+      const loadingIndicator = document.getElementById('loading');
+      const statusBanner = document.getElementById('statusBanner');
+      const indexStatus = document.getElementById('indexStatus');
+      const progressContainer = document.getElementById('progressContainer');
+      const progressBar = document.getElementById('progressBar');
+      const progressText = document.getElementById('progressText');
+      const recentSearches = document.getElementById('recentSearches');
+
+      function showStatus(message, type = 'info') {
+        statusBanner.className = `max-w-3xl mx-auto mb-4 p-4 rounded-lg ${
+          type === 'error'
+            ? 'bg-red-600'
+            : type === 'success'
+            ? 'bg-green-600'
+            : 'bg-blue-600'
+        }`;
+        statusBanner.textContent = message;
+        statusBanner.classList.remove('hidden');
+        setTimeout(() => {
+          statusBanner.classList.add('hidden');
+        }, 5000);
+      }
+
+      async function checkStatus() {
+        try {
+          const response = await fetch('/status');
+          const data = await response.json();
+          indexStatus.textContent = data.initialized
+            ? `${data.indexed_files} PDFs indexed`
+            : 'No PDFs indexed';
+        } catch (error) {
+          console.error('Error checking status:', error);
+        }
+      }
+
+      // Function to poll the progress endpoint and update the progress bar
+      async function trackProgress() {
+        while (true) {
+          try {
+            const response = await fetch('/progress');
+            const data = await response.json();
+            if (data.total > 0) {
+              const percent = (data.indexed / data.total) * 100;
+              progressBar.style.width = `${percent}%`;
+              progressText.textContent = `Indexed ${data.indexed} of ${data.total} PDFs`;
+            }
+            if (data.indexed >= data.total) {
+              progressContainer.classList.add('hidden');
+              break;
+            }
+          } catch (error) {
+            console.error('Error fetching progress:', error);
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      async function loadRecentChats() {
+        try {
+          const response = await fetch('/chats');
+          const chats = await response.json();
+          recentSearches.innerHTML = '<h3 class="text-lg font-semibold mb-4">Recent Chats</h3>';
+          chats.forEach(chat => {
+            const chatElement = document.createElement('div');
+            chatElement.className = 'bg-gray-800 p-2 rounded mb-2';
+            chatElement.innerHTML = `
+              <strong>${chat.query}</strong> on <em>${chat.filename}</em><br>
+              <span class="text-xs text-gray-400">${new Date(chat.timestamp).toLocaleTimeString()}</span><br>
+              ${chat.answer.substring(0, 100)}...
+            `;
+            recentSearches.appendChild(chatElement);
+          });
+        } catch (error) {
+          console.error('Error loading recent chats:', error);
+        }
+      }
+
+      checkStatus();
+      loadRecentChats();
+
+      indexButton.addEventListener('click', async () => {
+        try {
+          progressContainer.classList.remove('hidden');
+          progressBar.style.width = '0%';
+          progressText.textContent = 'Starting indexing...';
+
+          const response = await fetch('/index', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder_path: './pdfs' })
+          });
+
+          const data = await response.json();
+          if (data.status === 'success') {
+            showStatus(data.message, 'success');
+          } else {
+            showStatus(data.error + ': ' + data.details, 'error');
+          }
+
+          checkStatus();
+          trackProgress();
+        } catch (error) {
+          showStatus('Error indexing PDFs', 'error');
+        }
+      });
+
+      searchButton.addEventListener('click', async () => {
+        const query = searchInput.value.trim();
+        if (!query) {
+          showStatus('Please enter a search query', 'error');
+          return;
+        }
+        try {
+          loadingIndicator.style.display = 'block';
+          resultsContainer.innerHTML = '';
+
+          const response = await fetch('/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query })
+          });
+          const data = await response.json();
+          if (data.status === 'error') {
+            showStatus(data.error + ': ' + data.details, 'error');
+            return;
+          }
+          if (data.results.length === 0) {
+            resultsContainer.innerHTML = '<p class="text-gray-400">No results found</p>';
+            return;
+          }
+          data.results.forEach(result => {
+            const resultElement = document.createElement('div');
+            resultElement.className = 'bg-gray-800 p-4 rounded-lg';
+            resultElement.innerHTML = `
+              <h3 class="text-xl font-semibold mb-2">${result.filename}</h3>
+              <p class="text-gray-300">${result.content_snippet}</p>
+              <p class="text-sm text-gray-400 mt-2">Relevance Score: ${(1 - result.distance).toFixed(3)}</p>
+            `;
+            resultsContainer.appendChild(resultElement);
+          });
+          // Refresh recent chats after search
+          loadRecentChats();
+        } catch (error) {
+          showStatus('Error performing search', 'error');
+        } finally {
+          loadingIndicator.style.display = 'none';
+        }
+      });
+    });
+  </script>
+</body>
+</html>
